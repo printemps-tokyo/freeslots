@@ -179,6 +179,26 @@ describe("computeFreeSlots", () => {
     expect(computeFreeSlots(busy, baseRules({ minDurationMin: 60 }))).toHaveLength(0);
   });
 
+  it("rounds busy boundaries conservatively (floor start, ceil end)", () => {
+    // FIX 6: a meeting that ends at 10:00:20 (sub-minute) must NOT open a free
+    // slot starting at 10:00. Math.round(600.33) snaps the end DOWN to 10:00,
+    // which fabricates a full 60-minute gap 10:00-11:00; Math.ceil snaps it UP
+    // to 10:01, so a 60-min slot does not fit before the next meeting at 11:00.
+    const busy: BusyInterval[] = [
+      // 9:00:00 -> 10:00:20 busy.
+      { startMs: jst("2024-06-03", 9), endMs: jst("2024-06-03", 10) + 20_000 },
+      // 11:00 -> 19:00 busy, leaving only the 10:00:20-11:00 gap.
+      { startMs: jst("2024-06-03", 11), endMs: jst("2024-06-03", 19) },
+    ];
+    // The real free gap is ~59.7 minutes; a 60-min minimum must reject it.
+    // (With Math.round it would have looked like a full 60-min slot 10:00-11:00.)
+    expect(computeFreeSlots(busy, baseRules({ minDurationMin: 60 }))).toHaveLength(0);
+    // Sanity: a 59-min minimum still keeps the (ceil'd) 10:01-11:00 gap.
+    expect(computeFreeSlots(busy, baseRules({ minDurationMin: 59 }))[0]?.slots).toEqual([
+      { startMin: 601, endMin: 660 },
+    ]);
+  });
+
   it("throws when open >= close", () => {
     expect(() => computeFreeSlots([], baseRules({ openMin: 1140, closeMin: 540 }))).toThrow();
   });

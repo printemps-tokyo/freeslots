@@ -59,7 +59,7 @@ export interface DayFreeSlots {
 const MS_PER_MINUTE = 60_000;
 
 /** Format a Date's JST date as "YYYY-MM-DD". */
-function jstDateKey(ms: number): string {
+export function jstDateKey(ms: number): string {
   const w = toJstWall(ms);
   return `${w.year}-${pad2(w.month)}-${pad2(w.day)}`;
 }
@@ -195,8 +195,11 @@ export function computeFreeSlots(busy: BusyInterval[], rules: BusinessRules): Da
 
     for (const b of busy) {
       if (b.endMs <= dayOpenMs || b.startMs >= dayCloseMs) continue;
-      const startMin = Math.round((b.startMs - dayStart) / MS_PER_MINUTE);
-      const endMin = Math.round((b.endMs - dayStart) / MS_PER_MINUTE);
+      // Round conservatively so we never expose free time that overlaps real
+      // busy seconds: floor the start (busy may begin earlier in the minute),
+      // ceil the end (busy may run later into the minute).
+      const startMin = Math.floor((b.startMs - dayStart) / MS_PER_MINUTE);
+      const endMin = Math.ceil((b.endMs - dayStart) / MS_PER_MINUTE);
       busyMinutes.push({ startMin, endMin });
     }
 

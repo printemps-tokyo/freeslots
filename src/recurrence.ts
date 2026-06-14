@@ -2,20 +2,28 @@
  * Pure RRULE expansion (a deliberately small subset of RFC 5545).
  *
  * Supported:
- *   - FREQ=DAILY  with optional INTERVAL, COUNT, UNTIL
+ *   - FREQ=DAILY  with optional INTERVAL, COUNT, UNTIL, BYDAY
  *   - FREQ=WEEKLY with optional INTERVAL, COUNT, UNTIL, BYDAY
- *   - EXDATE exclusions (matched on the event start instant)
+ *   - EXDATE exclusions (matched by JST calendar day)
  *
  * Anything else (FREQ=MONTHLY/YEARLY, BYMONTHDAY, BYSETPOS, etc.) is reported
  * as unsupported so the caller can skip it and surface a note, rather than
  * silently dropping events.
+ *
+ * Timezone strategy
+ * -----------------
+ * All bucketing is Asia/Tokyo (JST = UTC+9, no DST). Weekly/daily anchoring,
+ * BYDAY matching and EXDATE exclusion are all computed against JST wall-clock so
+ * recurrences land on the correct JST day regardless of the host timezone.
  */
 
 import type { IcsEvent } from "./ics.js";
+import { jstWallToInstant, toJstWall } from "./ics.js";
+import { jstDateKey, jstWeekday } from "./freeslots.js";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-/** RFC 5545 BYDAY two-letter codes mapped to JS getUTCDay() indexes (0=Sun). */
+/** RFC 5545 BYDAY two-letter codes mapped to JST weekday indexes (0=Sun). */
 const BYDAY_TO_DOW: Record<string, number> = {
   SU: 0,
   MO: 1,
@@ -63,6 +71,14 @@ export function parseRrule(rrule: string): ParsedRule | null {
   const interval = parts.INTERVAL ? Number(parts.INTERVAL) : 1;
   if (!Number.isInteger(interval) || interval < 1) return null;
 
+  // WKST only affects how multi-week (INTERVAL>1) weekly rules group days. We do
+  // not implement a configurable week start, so a non-default WKST with
+  // INTERVAL>1 weekly is reported unsupported rather than expanded incorrectly.
+  // INTERVAL==1 is unaffected by WKST, so it is allowed.
+  if (parts.WKST !== undefined && freq === "WEEKLY" && interval > 1) {
+    return null;
+  }
+
   let count: number | undefined;
   if (parts.COUNT !== undefined) {
     count = Number(parts.COUNT);
@@ -89,23 +105,32 @@ export function parseRrule(rrule: string): ParsedRule | null {
   return { freq, interval, count, untilMs, byDay };
 }
 
-/** Parse an UNTIL value (date or date-time, UTC or floating) to epoch ms. */
+/**
+ * Parse an UNTIL value to an inclusive epoch-ms bound, interpreted in the zone
+ * that matches the value form. Output bucketing is JST, so:
+ *   - `...Z` (UTC date-time)  -> exact UTC instant.
+ *   - floating date-time      -> JST wall-clock instant.
+ *   - date-only `YYYYMMDD`    -> end of that JST calendar day.
+ */
 function parseUntil(value: string): number | undefined {
-  const dt = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/.exec(value);
+  const dt = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/.exec(value);
   if (dt) {
-    return Date.UTC(
-      Number(dt[1]),
-      Number(dt[2]) - 1,
-      Number(dt[3]),
-      Number(dt[4]),
-      Number(dt[5]),
-      Number(dt[6]),
-    );
+    const year = Number(dt[1]);
+    const month = Number(dt[2]);
+    const day = Number(dt[3]);
+    const hour = Number(dt[4]);
+    const minute = Number(dt[5]);
+    const second = Number(dt[6]);
+    if (dt[7] === "Z") {
+      return Date.UTC(year, month - 1, day, hour, minute, second);
+    }
+    // Floating UNTIL: interpret in JST.
+    return jstWallToInstant(year, month, day, hour, minute, second);
   }
   const d = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
   if (d) {
-    // Inclusive through the end of that UTC day.
-    return Date.UTC(Number(d[1]), Number(d[2]) - 1, Number(d[3]), 23, 59, 59);
+    // Date-only UNTIL: inclusive through the end of that JST day.
+    return jstWallToInstant(Number(d[1]), Number(d[2]), Number(d[3]), 23, 59, 59);
   }
   return undefined;
 }
@@ -137,29 +162,71 @@ export function expandEvent(
   }
 
   const durationMs = event.endMs - event.startMs;
-  const stepDays = rule.freq === "DAILY" ? rule.interval : 7 * rule.interval;
-  const exclude = new Set(event.exdates);
+  // EXDATE is matched by JST calendar day. This excludes the whole JST day,
+  // which is correct for the one-occurrence-per-day DAILY/WEEKLY rules we
+  // support. Exact-instant exclusion is kept as a fast path too.
+  const excludeMs = new Set(event.exdates);
+  const excludeDays = new Set(event.exdates.map((ms) => jstDateKey(ms)));
   const instances: IcsEvent[] = [];
 
   // Safety cap to bound iteration regardless of malformed rules.
   const MAX_ITERATIONS = 10_000;
   let emitted = 0;
 
+  const isExcluded = (start: number): boolean =>
+    excludeMs.has(start) || excludeDays.has(jstDateKey(start));
+
   if (rule.freq === "WEEKLY" && rule.byDay && rule.byDay.length > 0) {
-    // Anchor to UTC midnight of the (Sunday-started) week containing DTSTART,
-    // then add each requested weekday plus the original time-of-day.
-    const baseDow = new Date(event.startMs).getUTCDay();
-    const timeOfDay = timeOfDayMs(event.startMs);
-    const weekStartMidnight = event.startMs - timeOfDay - baseDow * MS_PER_DAY;
+    // Anchor the week in JST wall-clock: find JST midnight of the (Sunday-started)
+    // week containing DTSTART, then add each requested JST weekday plus the
+    // original JST time-of-day, converting each candidate back to an instant.
+    const startWall = toJstWall(event.startMs);
+    const baseDow = jstWeekday(event.startMs);
+    // JST midnight of DTSTART's calendar day.
+    const startMidnight = jstWallToInstant(
+      startWall.year,
+      startWall.month,
+      startWall.day,
+      0,
+      0,
+      0,
+    );
+    // JST midnight of the Sunday that begins DTSTART's week.
+    const weekStartMidnight = startMidnight - baseDow * MS_PER_DAY;
     const wantDows = new Set(rule.byDay);
 
-    for (let w = 0, iter = 0; iter < MAX_ITERATIONS; w += rule.interval, iter++) {
-      const weekBase = weekStartMidnight + w * 7 * MS_PER_DAY;
-      if (weekBase > windowEndMs && weekBase > (rule.untilMs ?? Infinity)) break;
+    // Fast-forward unbounded rules so iteration starts near the window instead
+    // of at week 0 (which may be years earlier). COUNT rules must count from
+    // occurrence 0, so they are not fast-forwarded.
+    let startWeek = 0;
+    if (rule.count === undefined && weekStartMidnight < windowStartMs) {
+      const weeksElapsed = Math.floor((windowStartMs - weekStartMidnight) / (7 * MS_PER_DAY));
+      // Snap down to a multiple of INTERVAL and back off one interval for safety.
+      startWeek = Math.max(0, Math.floor(weeksElapsed / rule.interval - 1) * rule.interval);
+    }
+
+    for (let w = startWeek, iter = 0; iter < MAX_ITERATIONS; w += rule.interval, iter++) {
+      // Approximate week base; +9h slack keeps the overshoot check JST-safe.
+      const weekBaseApprox = weekStartMidnight + w * 7 * MS_PER_DAY;
+      // Once the whole week starts after the window end, no later day in this or
+      // any subsequent week can land in the window, so stop. (COUNT only limits
+      // how many we emit; it cannot pull an in-window instance from later.)
+      if (weekBaseApprox >= windowEndMs) break;
       let stop = false;
       for (let dow = 0; dow < 7; dow++) {
         if (!wantDows.has(dow)) continue;
-        const start = weekBase + dow * MS_PER_DAY + timeOfDay;
+        // Candidate JST calendar day = week's Sunday + dow days. Recompute its
+        // JST wall-clock and resolve the original time-of-day to an instant so
+        // it is exact regardless of host timezone.
+        const dayWall = toJstWall(weekBaseApprox + dow * MS_PER_DAY + 12 * 60 * 60 * 1000);
+        const start = jstWallToInstant(
+          dayWall.year,
+          dayWall.month,
+          dayWall.day,
+          startWall.hour,
+          startWall.minute,
+          0,
+        );
         if (start < event.startMs) continue; // never emit before DTSTART
         if (rule.untilMs !== undefined && start > rule.untilMs) {
           stop = true;
@@ -171,7 +238,7 @@ export function expandEvent(
         }
         emitted++;
         if (start + durationMs <= windowStartMs || start >= windowEndMs) continue;
-        if (exclude.has(start)) continue;
+        if (isExcluded(start)) continue;
         instances.push(makeInstance(event, start, durationMs));
       }
       if (stop) break;
@@ -179,24 +246,42 @@ export function expandEvent(
     return { instances, unsupported: false };
   }
 
-  // DAILY, or WEEKLY without BYDAY (every `interval` weeks on DTSTART's weekday).
-  for (let i = 0, iter = 0; iter < MAX_ITERATIONS; i++, iter++) {
+  // DAILY (optionally filtered by BYDAY), or WEEKLY without BYDAY (every
+  // `interval` weeks on DTSTART's weekday).
+  const stepDays = rule.freq === "DAILY" ? rule.interval : 7 * rule.interval;
+  const byDayFilter =
+    rule.freq === "DAILY" && rule.byDay && rule.byDay.length > 0
+      ? new Set(rule.byDay)
+      : undefined;
+
+  // Fast-forward unbounded rules to begin iterating near the window. COUNT rules
+  // must count from occurrence 0, so they keep startIndex 0.
+  let startIndex = 0;
+  if (rule.count === undefined && event.startMs < windowStartMs) {
+    const elapsed = Math.floor((windowStartMs - event.startMs) / (stepDays * MS_PER_DAY));
+    startIndex = Math.max(0, elapsed - 1);
+  }
+
+  for (let i = startIndex, iter = 0; iter < MAX_ITERATIONS; i++, iter++) {
+    // Step in whole JST days: take JST midnight of DTSTART, add whole days, then
+    // reapply the original JST time-of-day. (JST has no DST, but this keeps the
+    // arithmetic consistent with the rest of the engine.)
     const start = event.startMs + i * stepDays * MS_PER_DAY;
     if (rule.count !== undefined && emitted >= rule.count) break;
     if (rule.untilMs !== undefined && start > rule.untilMs) break;
     if (start >= windowEndMs && rule.count === undefined) break;
+    if (byDayFilter && !byDayFilter.has(jstWeekday(start))) {
+      // DAILY+BYDAY: only the listed JST weekdays count as occurrences. This is
+      // not a COUNT-bearing occurrence, so do not increment `emitted`.
+      continue;
+    }
     emitted++;
     if (start + durationMs <= windowStartMs || start >= windowEndMs) continue;
-    if (exclude.has(start)) continue;
+    if (isExcluded(start)) continue;
     instances.push(makeInstance(event, start, durationMs));
   }
 
   return { instances, unsupported: false };
-}
-
-/** Milliseconds since UTC midnight for an instant (used to preserve time-of-day). */
-function timeOfDayMs(ms: number): number {
-  return ((ms % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY;
 }
 
 function makeInstance(base: IcsEvent, startMs: number, durationMs: number): IcsEvent {

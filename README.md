@@ -129,12 +129,26 @@ as JST), `TZID=...` zoned times (Tokyo and other IANA zones), and all-day
 For correctness over completeness, `freeslots` expands a deliberately small,
 well-tested subset of recurrence rules within the query window:
 
-- `FREQ=DAILY` with optional `INTERVAL`, `COUNT`, `UNTIL`.
+- `FREQ=DAILY` with optional `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`
+  (`BYDAY` restricts to those weekdays, e.g. `FREQ=DAILY;BYDAY=MO,WE,FR`).
 - `FREQ=WEEKLY` with optional `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`.
-- `EXDATE` exclusions.
+- `EXDATE` exclusions, matched by **JST calendar day** (so a date-only
+  `EXDATE;VALUE=DATE:...` or a differently-timed `EXDATE` still excludes the
+  matching day). This excludes the whole JST day, which is correct for the
+  one-occurrence-per-day rules above.
+- `UNTIL`: a `...Z` value is treated as UTC; a date-only or floating value is
+  interpreted in **JST** (a date-only `UNTIL` runs through the end of that JST day).
+- `DURATION`: a `VEVENT` with `DURATION` and no `DTEND` uses
+  `start + DURATION` as its end (e.g. `DURATION:PT1H`); when both are present,
+  `DTEND` wins.
+
+All recurrence day-bucketing (weekly/daily anchoring and `BYDAY` matching) is
+computed in **Asia/Tokyo**, so instances land on the correct JST day regardless
+of the host timezone.
 
 Anything else (`FREQ=MONTHLY`/`YEARLY`, `BYMONTHDAY`, `BYSETPOS`, positional
-`BYDAY` like `2MO`, etc.) is **skipped, not silently dropped**: the run prints a
+`BYDAY` like `2MO`, a `WKST` other than the default on a weekly rule with
+`INTERVAL>1`, etc.) is **skipped, not silently dropped**: the run prints a
 note to stderr such as:
 
 ```

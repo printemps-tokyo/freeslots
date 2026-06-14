@@ -156,7 +156,7 @@ function zoneOffsetMinutes(ms: number, timeZone: string): number {
  * Resolve wall-clock fields in a named IANA timezone to an absolute instant.
  * Iterates once to settle DST boundaries (offset can depend on the instant).
  */
-function wallTimeToInstant(
+export function wallTimeToInstant(
   timeZone: string,
   year: number,
   month: number, // 1-12
@@ -175,6 +175,50 @@ function wallTimeToInstant(
     guess = next;
   }
   return guess;
+}
+
+/**
+ * Convert Asia/Tokyo wall-clock fields to an absolute instant. JST has no DST,
+ * but the offset is still derived via Intl (not hardcoded) for consistency.
+ */
+export function jstWallToInstant(
+  year: number,
+  month: number, // 1-12
+  day: number,
+  hour: number,
+  minute: number,
+  second = 0,
+): number {
+  return wallTimeToInstant("Asia/Tokyo", year, month, day, hour, minute, second);
+}
+
+/**
+ * Parse an RFC 5545 DURATION value into milliseconds.
+ *
+ * Supports weeks (`P1W`), days, hours, minutes and seconds in the
+ * `P[n]W` / `P[n]DT[n]H[n]M[n]S` grammar (e.g. `PT1H`, `PT1H30M`, `P1D`,
+ * `P1DT2H`, `PT0S`). A leading `-` (or a zero/negative total) is treated as
+ * zero-length, since a negative busy interval blocks no time. Returns 0 for
+ * unparseable values.
+ */
+export function parseIcsDuration(value: string): number {
+  const trimmed = value.trim();
+  const m = /^([+-]?)P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(trimmed);
+  if (!m) return 0;
+  // Reject "P" with no components at all (and stray "PT" with nothing after).
+  if (!m[2] && !m[3] && !m[4] && !m[5] && !m[6]) return 0;
+  const sign = m[1] === "-" ? -1 : 1;
+  const weeks = Number(m[2] ?? 0);
+  const days = Number(m[3] ?? 0);
+  const hours = Number(m[4] ?? 0);
+  const minutes = Number(m[5] ?? 0);
+  const seconds = Number(m[6] ?? 0);
+  const totalMs =
+    sign *
+    (weeks * 7 * 24 * 60 * 60 + days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60 + seconds) *
+    1000;
+  // Negative / zero durations block no time.
+  return totalMs > 0 ? totalMs : 0;
 }
 
 interface ParsedDateTime {
@@ -235,6 +279,7 @@ export function parseIcs(text: string): IcsEvent[] {
   let inEvent = false;
   let startMs: number | undefined;
   let endMs: number | undefined;
+  let durationMs: number | undefined;
   let allDay = false;
   let transparent = false;
   let rrule: string | undefined;
@@ -249,6 +294,7 @@ export function parseIcs(text: string): IcsEvent[] {
       inEvent = true;
       startMs = undefined;
       endMs = undefined;
+      durationMs = undefined;
       allDay = false;
       transparent = false;
       rrule = undefined;
@@ -260,8 +306,13 @@ export function parseIcs(text: string): IcsEvent[] {
       if (inEvent && startMs !== undefined) {
         let resolvedEnd = endMs;
         if (resolvedEnd === undefined) {
-          // No DTEND: all-day -> one full day; timed -> zero duration.
-          resolvedEnd = allDay ? startMs + 24 * 60 * MS_PER_MINUTE : startMs;
+          if (durationMs !== undefined) {
+            // No DTEND but a DURATION is present: end = start + duration.
+            resolvedEnd = startMs + durationMs;
+          } else {
+            // Neither DTEND nor DURATION: all-day -> one full day; timed -> zero.
+            resolvedEnd = allDay ? startMs + 24 * 60 * MS_PER_MINUTE : startMs;
+          }
         }
         events.push({
           startMs,
@@ -292,6 +343,9 @@ export function parseIcs(text: string): IcsEvent[] {
         if (dt) endMs = dt.ms;
         break;
       }
+      case "DURATION":
+        durationMs = parseIcsDuration(value);
+        break;
       case "TRANSP":
         transparent = value.trim().toUpperCase() === "TRANSPARENT";
         break;
