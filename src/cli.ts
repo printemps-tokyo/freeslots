@@ -31,6 +31,7 @@ Options:
   --days <list>             Business weekdays, comma list of
                             mon,tue,wed,thu,fri,sat,sun (default: mon,tue,wed,thu,fri)
   --duration <min>          Minimum free-slot length in minutes (default: 30)
+  --holidays <list>         Comma list of YYYY-MM-DD dates to exclude (e.g. holidays)
   --json                    Output JSON instead of the human format
   --ics-out <file>          Also write the free slots to an .ics calendar file
   --ics-summary <text>      Event title for --ics-out (default: "Free")
@@ -121,6 +122,17 @@ function parseDays(value: string): Set<number> {
   return set;
 }
 
+/** Parse a comma list of YYYY-MM-DD dates into a validated Set. */
+function parseHolidays(value: string): Set<string> {
+  const set = new Set<string>();
+  for (const raw of value.split(",")) {
+    const d = raw.trim();
+    if (d === "") continue;
+    set.add(parseDate("holidays", d));
+  }
+  return set;
+}
+
 /** Parse a positive integer (minutes). */
 function parseDuration(value: string): number {
   const n = Number(value);
@@ -154,6 +166,7 @@ async function main(): Promise<number> {
         hours: { type: "string" },
         days: { type: "string" },
         duration: { type: "string" },
+        holidays: { type: "string" },
         json: { type: "boolean", default: false },
         "ics-out": { type: "string" },
         "ics-summary": { type: "string" },
@@ -186,8 +199,9 @@ async function main(): Promise<number> {
       ? parseDays(values.days)
       : new Set([1, 2, 3, 4, 5]);
     const minDurationMin = values.duration ? parseDuration(values.duration) : 30;
+    const holidays = values.holidays ? parseHolidays(values.holidays) : undefined;
 
-    rules = { fromDate, toDate, openMin, closeMin, businessDays, minDurationMin };
+    rules = { fromDate, toDate, openMin, closeMin, businessDays, minDurationMin, holidays };
     if (jstMidnightMs(fromDate) > jstMidnightMs(toDate)) {
       throw new Error("--from date must not be after --to date");
     }

@@ -86,6 +86,7 @@ Example output:
 | `--hours <HH:MM-HH:MM>` | Business hours | `09:00-19:00` |
 | `--days <list>` | Business weekdays: `mon,tue,wed,thu,fri,sat,sun` | `mon,tue,wed,thu,fri` |
 | `--duration <min>` | Minimum free-slot length in minutes | `30` |
+| `--holidays <list>` | Comma list of `YYYY-MM-DD` dates to exclude (e.g. holidays) | none |
 | `--json` | Output JSON instead of the human format | off |
 | `--ics-out <file>` | Also write the free slots to an `.ics` file | off |
 | `--ics-summary <text>` | Event title used by `--ics-out` | `Free` |

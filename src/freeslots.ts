@@ -39,6 +39,8 @@ export interface BusinessRules {
   businessDays: Set<number>;
   /** Minimum free-slot length in minutes. */
   minDurationMin: number;
+  /** JST dates ("YYYY-MM-DD") to exclude entirely, e.g. public holidays. */
+  holidays?: Set<string>;
 }
 
 /** A free slot expressed as JST minutes from midnight. */
@@ -187,6 +189,7 @@ export function computeFreeSlots(busy: BusyInterval[], rules: BusinessRules): Da
     const dateKey = jstDateKey(dayStart);
     const weekday = jstWeekday(dayStart);
     if (!rules.businessDays.has(weekday)) continue;
+    if (rules.holidays?.has(dateKey)) continue;
 
     // Busy intervals as minutes-from-JST-midnight for this specific day.
     const dayOpenMs = dayStart + rules.openMin * MS_PER_MINUTE;

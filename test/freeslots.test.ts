@@ -101,6 +101,16 @@ describe("computeFreeSlots", () => {
     expect(days[0]?.slots).toEqual([{ startMin: 540, endMin: 1140 }]);
   });
 
+  it("excludes holiday dates entirely", () => {
+    // 2024-06-03 (Mon) and 2024-06-04 (Tue); mark Tue as a holiday.
+    const rules = baseRules({
+      toDate: "2024-06-04",
+      holidays: new Set(["2024-06-04"]),
+    });
+    const days = computeFreeSlots([], rules);
+    expect(days.map((d) => d.date)).toEqual(["2024-06-03"]);
+  });
+
   it("subtracts overlapping busy events", () => {
     const busy: BusyInterval[] = [
       { startMs: jst("2024-06-03", 12), endMs: jst("2024-06-03", 13) },
