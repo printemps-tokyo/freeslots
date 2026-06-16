@@ -35,3 +35,11 @@ export type { CollectResult } from "./pipeline.js";
 
 export { buildIcs, utcStamp, jstWallToUtcStamp } from "./ics-export.js";
 export type { IcsOptions } from "./ics-export.js";
+
+export {
+  computeOverlapSlots,
+  formatOverlapSlots,
+  formatOverlapDayLine,
+  toJsonOverlap,
+} from "./overlap.js";
+export type { OverlapSlot, DayOverlapSlots, JsonOverlapDay } from "./overlap.js";

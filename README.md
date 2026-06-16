@@ -87,11 +87,29 @@ Example output:
 | `--days <list>` | Business weekdays: `mon,tue,wed,thu,fri,sat,sun` | `mon,tue,wed,thu,fri` |
 | `--duration <min>` | Minimum free-slot length in minutes | `30` |
 | `--holidays <list>` | Comma list of `YYYY-MM-DD` dates to exclude (e.g. holidays) | none |
+| `--names <list>` | Labels for each `.ics` input (multi-person mode) | file names |
+| `--require <n>` | Min. people free per slot (multi-person mode) | all inputs |
 | `--json` | Output JSON instead of the human format | off |
 | `--ics-out <file>` | Also write the free slots to an `.ics` file | off |
 | `--ics-summary <text>` | Event title used by `--ics-out` | `Free` |
 | `-h, --help` | Show help | |
 | `-v, --version` | Show version | |
+
+### Multi-person mode
+
+Pass one `.ics` per person and use `--names` / `--require` to find common
+availability. By default every input must be free (the same as merging the
+calendars). A lower `--require` keeps slots where at least that many are free
+and annotates who is busy as `(X不可)`:
+
+```bash
+# times when everyone is free
+freeslots --names "Alice,Bob,Carol" alice.ics bob.ics carol.ics
+
+# times when at least 2 of 3 are free (showing who is out)
+freeslots --names "Alice,Bob,Carol" --require 2 alice.ics bob.ics carol.ics
+# 6/3(月) 9:00〜10:00、10:00〜12:00(Alice不可)、14:00〜19:00
+```
 
 Invalid arguments and unreadable files produce a clear error on stderr and a
 non-zero exit code.

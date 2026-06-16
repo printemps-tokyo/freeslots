@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
+import { basename, extname } from "node:path";
 import {
   parseIcs,
   computeFreeSlots,
   collectBusyIntervals,
+  computeOverlapSlots,
+  formatOverlapSlots,
+  toJsonOverlap,
   jstMidnightMs,
   formatSlots,
   toJson,
@@ -13,6 +17,8 @@ import {
   WEEKDAY_CODES,
   type WeekdayCode,
   type BusinessRules,
+  type IcsEvent,
+  type DayFreeSlots,
 } from "./index.js";
 
 const HELP = `freeslots - find free meeting slots from .ics calendars
@@ -32,6 +38,9 @@ Options:
                             mon,tue,wed,thu,fri,sat,sun (default: mon,tue,wed,thu,fri)
   --duration <min>          Minimum free-slot length in minutes (default: 30)
   --holidays <list>         Comma list of YYYY-MM-DD dates to exclude (e.g. holidays)
+  --names <list>            Labels for each .ics input (multi-person mode)
+  --require <n>             Min. people free per slot (default: all; <all annotates
+                            who is busy as "(X不可)")
   --json                    Output JSON instead of the human format
   --ics-out <file>          Also write the free slots to an .ics calendar file
   --ics-summary <text>      Event title for --ics-out (default: "Free")
@@ -167,6 +176,8 @@ async function main(): Promise<number> {
         days: { type: "string" },
         duration: { type: "string" },
         holidays: { type: "string" },
+        names: { type: "string" },
+        require: { type: "string" },
         json: { type: "boolean", default: false },
         "ics-out": { type: "string" },
         "ics-summary": { type: "string" },
@@ -210,8 +221,8 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  // Read and merge all calendars.
-  const allEvents = [];
+  // Read each calendar separately (per-file events drive multi-person mode).
+  const perFileEvents: IcsEvent[][] = [];
   for (const path of positionals) {
     let text: string;
     try {
@@ -221,7 +232,7 @@ async function main(): Promise<number> {
       return 1;
     }
     try {
-      allEvents.push(...parseIcs(text));
+      perFileEvents.push(parseIcs(text));
     } catch (err) {
       process.stderr.write(`error: failed to parse "${path}": ${(err as Error).message}\n`);
       return 1;
@@ -232,45 +243,95 @@ async function main(): Promise<number> {
   const windowStartMs = jstMidnightMs(rules.fromDate);
   const windowEndMs = jstMidnightMs(rules.toDate) + MS_PER_DAY;
 
-  const { busy, unsupportedRecurrence } = collectBusyIntervals(
-    allEvents,
-    windowStartMs,
-    windowEndMs,
-  );
-
+  let unsupportedRecurrence = 0;
+  const busyPerFile = perFileEvents.map((events) => {
+    const r = collectBusyIntervals(events, windowStartMs, windowEndMs);
+    unsupportedRecurrence += r.unsupportedRecurrence;
+    return r.busy;
+  });
   if (unsupportedRecurrence > 0) {
     process.stderr.write(
       `note: skipped ${unsupportedRecurrence} event(s) with unsupported recurrence rules\n`,
     );
   }
 
-  const days = computeFreeSlots(busy, rules);
-
-  if (values["ics-out"]) {
-    const ics = buildIcs(days, {
-      summary: values["ics-summary"],
-      dtstamp: utcStamp(Date.now()),
-    });
-    try {
-      await writeFile(values["ics-out"], ics, "utf8");
-    } catch (err) {
-      process.stderr.write(
-        `error: cannot write --ics-out "${values["ics-out"]}": ${(err as Error).message}\n`,
-      );
+  // Multi-person mode is triggered by --names or --require.
+  if (values.names !== undefined || values.require !== undefined) {
+    const n = positionals.length;
+    const names = values.names
+      ? values.names.split(",").map((s) => s.trim())
+      : positionals.map((p) => basename(p, extname(p)));
+    if (values.names && names.length !== n) {
+      process.stderr.write(`error: --names lists ${names.length} label(s) but ${n} file(s) given\n`);
       return 1;
     }
-    const slotCount = days.reduce((n, d) => n + d.slots.length, 0);
-    process.stderr.write(`wrote ${slotCount} slot(s) to ${values["ics-out"]}\n`);
+    let require = n;
+    if (values.require !== undefined) {
+      const r = Number(values.require);
+      if (!Number.isInteger(r) || r < 1 || r > n) {
+        process.stderr.write(`error: --require must be an integer between 1 and ${n}\n`);
+        return 1;
+      }
+      require = r;
+    }
+    const days = computeOverlapSlots(busyPerFile, names, rules, require);
+    if (values["ics-out"] && !(await writeIcs(values, days.map(toFreeSlotsShape)))) {
+      return 1;
+    }
+    if (values.json) {
+      process.stdout.write(JSON.stringify(toJsonOverlap(days), null, 2) + "\n");
+    } else {
+      const out = formatOverlapSlots(days);
+      process.stdout.write(out.length > 0 ? out + "\n" : "");
+    }
+    return 0;
   }
 
+  // Single (merged) mode: everyone-free slots across all calendars.
+  const merged = busyPerFile.flat();
+  const days = computeFreeSlots(merged, rules);
+
+  if (values["ics-out"] && !(await writeIcs(values, days))) {
+    return 1;
+  }
   if (values.json) {
     process.stdout.write(JSON.stringify(toJson(days), null, 2) + "\n");
   } else {
     const out = formatSlots(days);
     process.stdout.write(out.length > 0 ? out + "\n" : "");
   }
-
   return 0;
+}
+
+/** Drop the per-slot busy annotation so overlap days can feed buildIcs. */
+function toFreeSlotsShape(day: {
+  date: string;
+  weekday: number;
+  slots: { startMin: number; endMin: number }[];
+}): DayFreeSlots {
+  return {
+    date: day.date,
+    weekday: day.weekday,
+    slots: day.slots.map((s) => ({ startMin: s.startMin, endMin: s.endMin })),
+  };
+}
+
+/** Write the free slots to --ics-out; returns false on a write error. */
+async function writeIcs(
+  values: { "ics-out"?: string; "ics-summary"?: string },
+  days: DayFreeSlots[],
+): Promise<boolean> {
+  const path = values["ics-out"] as string;
+  const ics = buildIcs(days, { summary: values["ics-summary"], dtstamp: utcStamp(Date.now()) });
+  try {
+    await writeFile(path, ics, "utf8");
+  } catch (err) {
+    process.stderr.write(`error: cannot write --ics-out "${path}": ${(err as Error).message}\n`);
+    return false;
+  }
+  const slotCount = days.reduce((n, d) => n + d.slots.length, 0);
+  process.stderr.write(`wrote ${slotCount} slot(s) to ${path}\n`);
+  return true;
 }
 
 /** Default --to is --from plus 6 days (a 7-day window). */
