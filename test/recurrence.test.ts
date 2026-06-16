@@ -252,3 +252,56 @@ describe("FIX 5: VEVENT with DURATION and no DTEND", () => {
     expect(events[0]?.endMs).toBe(Date.UTC(2024, 5, 2, 6, 0, 0));
   });
 });
+
+describe("MONTHLY recurrence", () => {
+  function expandOne(...lines: string[]) {
+    const events = parseIcs(ics(vevent(...lines)));
+    return expandEvent(events[0]!, windowStart, windowEnd).instances;
+  }
+
+  it("expands BYMONTHDAY onto that day each month (JST)", () => {
+    const inst = expandOne(
+      "DTSTART;TZID=Asia/Tokyo:20240115T100000",
+      "DTEND;TZID=Asia/Tokyo:20240115T110000",
+      "RRULE:FREQ=MONTHLY;BYMONTHDAY=15",
+    );
+    // Only the June 15 occurrence falls in the window.
+    expect(inst.map((e) => jstKey(e.startMs))).toEqual(["2024-06-15"]);
+  });
+
+  it("uses DTSTART's day-of-month when BYMONTHDAY is absent", () => {
+    const inst = expandOne(
+      "DTSTART;TZID=Asia/Tokyo:20240510T093000",
+      "DTEND;TZID=Asia/Tokyo:20240510T100000",
+      "RRULE:FREQ=MONTHLY",
+    );
+    expect(inst.map((e) => jstKey(e.startMs))).toEqual(["2024-06-10"]);
+  });
+
+  it("skips months without the requested day (Feb/Apr/Jun have no 31st)", () => {
+    const inst = expandOne(
+      "DTSTART;TZID=Asia/Tokyo:20240131T100000",
+      "DTEND;TZID=Asia/Tokyo:20240131T110000",
+      "RRULE:FREQ=MONTHLY;BYMONTHDAY=31",
+    );
+    // The window (May 25 - Jul 5) contains May 31 but not a June 31 (skipped).
+    expect(inst.map((e) => jstKey(e.startMs))).toEqual(["2024-05-31"]);
+  });
+
+  it("supports INTERVAL between months", () => {
+    // Every 2 months from Feb 20 -> Apr, Jun, ... June 20 is in the window.
+    const inst = expandOne(
+      "DTSTART;TZID=Asia/Tokyo:20240220T100000",
+      "DTEND;TZID=Asia/Tokyo:20240220T110000",
+      "RRULE:FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=20",
+    );
+    expect(inst.map((e) => jstKey(e.startMs))).toEqual(["2024-06-20"]);
+  });
+
+  it("parses MONTHLY+BYMONTHDAY but rejects positional MONTHLY+BYDAY", () => {
+    expect(parseRrule("FREQ=MONTHLY;BYMONTHDAY=1,15")).not.toBeNull();
+    expect(parseRrule("FREQ=MONTHLY;BYDAY=2MO")).toBeNull();
+    // BYMONTHDAY with a non-MONTHLY freq stays unsupported.
+    expect(parseRrule("FREQ=WEEKLY;BYMONTHDAY=15")).toBeNull();
+  });
+});

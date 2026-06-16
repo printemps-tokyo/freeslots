@@ -2,13 +2,14 @@
  * Pure RRULE expansion (a deliberately small subset of RFC 5545).
  *
  * Supported:
- *   - FREQ=DAILY  with optional INTERVAL, COUNT, UNTIL, BYDAY
- *   - FREQ=WEEKLY with optional INTERVAL, COUNT, UNTIL, BYDAY
+ *   - FREQ=DAILY   with optional INTERVAL, COUNT, UNTIL, BYDAY
+ *   - FREQ=WEEKLY  with optional INTERVAL, COUNT, UNTIL, BYDAY
+ *   - FREQ=MONTHLY with optional INTERVAL, COUNT, UNTIL, BYMONTHDAY
  *   - EXDATE exclusions (matched by JST calendar day)
  *
- * Anything else (FREQ=MONTHLY/YEARLY, BYMONTHDAY, BYSETPOS, etc.) is reported
- * as unsupported so the caller can skip it and surface a note, rather than
- * silently dropping events.
+ * Anything else (FREQ=YEARLY, positional BYDAY like "2MO", BYSETPOS, etc.) is
+ * reported as unsupported so the caller can skip it and surface a note, rather
+ * than silently dropping events.
  *
  * Timezone strategy
  * -----------------
@@ -35,11 +36,12 @@ const BYDAY_TO_DOW: Record<string, number> = {
 };
 
 interface ParsedRule {
-  freq: "DAILY" | "WEEKLY";
+  freq: "DAILY" | "WEEKLY" | "MONTHLY";
   interval: number;
   count?: number;
   untilMs?: number;
   byDay?: number[];
+  byMonthDay?: number[];
 }
 
 /** Parse an RRULE value into a structured rule, or null if unsupported. */
@@ -52,20 +54,25 @@ export function parseRrule(rrule: string): ParsedRule | null {
   }
 
   const freq = (parts.FREQ ?? "").toUpperCase();
-  if (freq !== "DAILY" && freq !== "WEEKLY") return null;
+  if (freq !== "DAILY" && freq !== "WEEKLY" && freq !== "MONTHLY") return null;
 
   // Reject rule parts we do not implement to avoid producing wrong results.
-  const unsupportedKeys = [
-    "BYMONTHDAY",
-    "BYMONTH",
-    "BYYEARDAY",
-    "BYWEEKNO",
-    "BYSETPOS",
-    "BYHOUR",
-    "BYMINUTE",
-  ];
+  const unsupportedKeys = ["BYMONTH", "BYYEARDAY", "BYWEEKNO", "BYSETPOS", "BYHOUR", "BYMINUTE"];
   for (const key of unsupportedKeys) {
     if (parts[key] !== undefined) return null;
+  }
+
+  // BYMONTHDAY is only meaningful (and only implemented) for MONTHLY.
+  let byMonthDay: number[] | undefined;
+  if (parts.BYMONTHDAY !== undefined) {
+    if (freq !== "MONTHLY") return null;
+    byMonthDay = [];
+    for (const token of parts.BYMONTHDAY.split(",")) {
+      const n = Number(token.trim());
+      // Only positive day-of-month is supported (negative offsets like -1 not).
+      if (!Number.isInteger(n) || n < 1 || n > 31) return null;
+      byMonthDay.push(n);
+    }
   }
 
   const interval = parts.INTERVAL ? Number(parts.INTERVAL) : 1;
@@ -93,6 +100,8 @@ export function parseRrule(rrule: string): ParsedRule | null {
 
   let byDay: number[] | undefined;
   if (parts.BYDAY !== undefined) {
+    // MONTHLY+BYDAY needs positional handling ("2MO"), which is unsupported.
+    if (freq === "MONTHLY") return null;
     byDay = [];
     for (const token of parts.BYDAY.split(",")) {
       const code = token.trim().toUpperCase();
@@ -102,7 +111,7 @@ export function parseRrule(rrule: string): ParsedRule | null {
     }
   }
 
-  return { freq, interval, count, untilMs, byDay };
+  return { freq, interval, count, untilMs, byDay, byMonthDay };
 }
 
 /**
@@ -246,6 +255,58 @@ export function expandEvent(
     return { instances, unsupported: false };
   }
 
+  if (rule.freq === "MONTHLY") {
+    // Anchor in JST: step by `interval` months from DTSTART's month, emitting an
+    // instance on each target day-of-month (BYMONTHDAY, or DTSTART's day) at the
+    // original JST time-of-day. Days that do not exist in a month (e.g. the 31st
+    // of February) are simply skipped per RFC 5545.
+    const startWall = toJstWall(event.startMs);
+    const targetDays =
+      rule.byMonthDay && rule.byMonthDay.length > 0
+        ? [...rule.byMonthDay].sort((a, b) => a - b)
+        : [startWall.day];
+
+    // Fast-forward unbounded rules to near the window (COUNT counts from 0).
+    let startMonth = 0;
+    if (rule.count === undefined && event.startMs < windowStartMs) {
+      const winWall = toJstWall(windowStartMs);
+      const monthsDiff =
+        winWall.year * 12 + (winWall.month - 1) - (startWall.year * 12 + (startWall.month - 1));
+      if (monthsDiff > 0) {
+        startMonth = Math.max(0, Math.floor(monthsDiff / rule.interval - 1) * rule.interval);
+      }
+    }
+
+    for (let mi = startMonth, iter = 0; iter < MAX_ITERATIONS; mi += rule.interval, iter++) {
+      const total = startWall.month - 1 + mi;
+      const year = startWall.year + Math.floor(total / 12);
+      const month = (total % 12) + 1; // 1-based
+      // If the whole month begins after the window, no later month can land in it.
+      if (jstWallToInstant(year, month, 1, 0, 0, 0) >= windowEndMs) break;
+      const dim = daysInMonth(year, month);
+      let stop = false;
+      for (const day of targetDays) {
+        if (day > dim) continue; // invalid date in this month -> not an occurrence
+        const start = jstWallToInstant(year, month, day, startWall.hour, startWall.minute, 0);
+        if (start < event.startMs) continue;
+        if (rule.untilMs !== undefined && start > rule.untilMs) {
+          stop = true;
+          break;
+        }
+        if (rule.count !== undefined && emitted >= rule.count) {
+          stop = true;
+          break;
+        }
+        emitted++;
+        if (start + durationMs <= windowStartMs || start >= windowEndMs) continue;
+        if (isExcluded(start)) continue;
+        instances.push(makeInstance(event, start, durationMs));
+      }
+      if (stop) break;
+    }
+    return { instances, unsupported: false };
+  }
+
   // DAILY (optionally filtered by BYDAY), or WEEKLY without BYDAY (every
   // `interval` weeks on DTSTART's weekday).
   const stepDays = rule.freq === "DAILY" ? rule.interval : 7 * rule.interval;
@@ -282,6 +343,11 @@ export function expandEvent(
   }
 
   return { instances, unsupported: false };
+}
+
+/** Number of days in a 1-based month of a given year. */
+function daysInMonth(year: number, month: number): number {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 function makeInstance(base: IcsEvent, startMs: number, durationMs: number): IcsEvent {

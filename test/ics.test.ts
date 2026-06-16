@@ -128,10 +128,10 @@ describe("parseRrule", () => {
   });
 
   it("returns null for unsupported FREQ", () => {
-    expect(parseRrule("FREQ=MONTHLY")).toBeNull();
+    expect(parseRrule("FREQ=YEARLY")).toBeNull();
   });
 
-  it("returns null for unsupported rule parts like BYMONTHDAY", () => {
+  it("returns null for unsupported rule parts like BYMONTHDAY on DAILY", () => {
     expect(parseRrule("FREQ=DAILY;BYMONTHDAY=1")).toBeNull();
   });
 
@@ -191,7 +191,7 @@ describe("expandEvent", () => {
 
   it("flags unsupported recurrence", () => {
     const events = parseIcs(
-      ics(vevent("DTSTART:20240602T040000Z", "DTEND:20240602T050000Z", "RRULE:FREQ=MONTHLY")),
+      ics(vevent("DTSTART:20240602T040000Z", "DTEND:20240602T050000Z", "RRULE:FREQ=YEARLY")),
     );
     const out = expandEvent(events[0]!, windowStart, windowEnd);
     expect(out.unsupported).toBe(true);

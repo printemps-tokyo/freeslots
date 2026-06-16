@@ -134,6 +134,9 @@ well-tested subset of recurrence rules within the query window:
 - `FREQ=DAILY` with optional `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`
   (`BYDAY` restricts to those weekdays, e.g. `FREQ=DAILY;BYDAY=MO,WE,FR`).
 - `FREQ=WEEKLY` with optional `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`.
+- `FREQ=MONTHLY` with optional `INTERVAL`, `COUNT`, `UNTIL`, `BYMONTHDAY`
+  (`BYMONTHDAY=15` recurs on the 15th; without it, DTSTART's day-of-month is
+  used). A day that does not exist in a month (e.g. the 31st of June) is skipped.
 - `EXDATE` exclusions, matched by **JST calendar day** (so a date-only
   `EXDATE;VALUE=DATE:...` or a differently-timed `EXDATE` still excludes the
   matching day). This excludes the whole JST day, which is correct for the
@@ -148,8 +151,8 @@ All recurrence day-bucketing (weekly/daily anchoring and `BYDAY` matching) is
 computed in **Asia/Tokyo**, so instances land on the correct JST day regardless
 of the host timezone.
 
-Anything else (`FREQ=MONTHLY`/`YEARLY`, `BYMONTHDAY`, `BYSETPOS`, positional
-`BYDAY` like `2MO`, a `WKST` other than the default on a weekly rule with
+Anything else (`FREQ=YEARLY`, `BYSETPOS`, positional `BYDAY` like `2MO`,
+negative `BYMONTHDAY`, a `WKST` other than the default on a weekly rule with
 `INTERVAL>1`, etc.) is **skipped, not silently dropped**: the run prints a
 note to stderr such as:
 
