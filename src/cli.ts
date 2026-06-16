@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   parseIcs,
   computeFreeSlots,
@@ -8,6 +8,8 @@ import {
   jstMidnightMs,
   formatSlots,
   toJson,
+  buildIcs,
+  utcStamp,
   WEEKDAY_CODES,
   type WeekdayCode,
   type BusinessRules,
@@ -30,6 +32,8 @@ Options:
                             mon,tue,wed,thu,fri,sat,sun (default: mon,tue,wed,thu,fri)
   --duration <min>          Minimum free-slot length in minutes (default: 30)
   --json                    Output JSON instead of the human format
+  --ics-out <file>          Also write the free slots to an .ics calendar file
+  --ics-summary <text>      Event title for --ics-out (default: "Free")
   -h, --help                Show this help
   -v, --version             Show version
 
@@ -151,6 +155,8 @@ async function main(): Promise<number> {
         days: { type: "string" },
         duration: { type: "string" },
         json: { type: "boolean", default: false },
+        "ics-out": { type: "string" },
+        "ics-summary": { type: "string" },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -225,6 +231,23 @@ async function main(): Promise<number> {
   }
 
   const days = computeFreeSlots(busy, rules);
+
+  if (values["ics-out"]) {
+    const ics = buildIcs(days, {
+      summary: values["ics-summary"],
+      dtstamp: utcStamp(Date.now()),
+    });
+    try {
+      await writeFile(values["ics-out"], ics, "utf8");
+    } catch (err) {
+      process.stderr.write(
+        `error: cannot write --ics-out "${values["ics-out"]}": ${(err as Error).message}\n`,
+      );
+      return 1;
+    }
+    const slotCount = days.reduce((n, d) => n + d.slots.length, 0);
+    process.stderr.write(`wrote ${slotCount} slot(s) to ${values["ics-out"]}\n`);
+  }
 
   if (values.json) {
     process.stdout.write(JSON.stringify(toJson(days), null, 2) + "\n");

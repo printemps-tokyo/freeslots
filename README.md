@@ -87,6 +87,8 @@ Example output:
 | `--days <list>` | Business weekdays: `mon,tue,wed,thu,fri,sat,sun` | `mon,tue,wed,thu,fri` |
 | `--duration <min>` | Minimum free-slot length in minutes | `30` |
 | `--json` | Output JSON instead of the human format | off |
+| `--ics-out <file>` | Also write the free slots to an `.ics` file | off |
+| `--ics-summary <text>` | Event title used by `--ics-out` | `Free` |
 | `-h, --help` | Show help | |
 | `-v, --version` | Show version | |
 
