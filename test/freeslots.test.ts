@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeFreeSlots,
+  limitSlotsPerDay,
   mergeIntervals,
   subtractBusy,
   jstMidnightMs,
@@ -227,5 +228,37 @@ describe("jst helpers", () => {
 
   it("jstMidnightMs maps to the correct UTC instant (+9)", () => {
     expect(jstMidnightMs("2024-06-03")).toBe(Date.UTC(2024, 5, 2, 15, 0, 0));
+  });
+});
+
+describe("limitSlotsPerDay", () => {
+  const days = [
+    {
+      date: "2024-06-03",
+      weekday: 1,
+      slots: [
+        { startMin: 540, endMin: 600 },
+        { startMin: 660, endMin: 720 },
+        { startMin: 780, endMin: 840 },
+      ],
+    },
+    { date: "2024-06-04", weekday: 2, slots: [{ startMin: 540, endMin: 600 }] },
+  ];
+
+  it("keeps at most n earliest slots per day", () => {
+    const out = limitSlotsPerDay(days, 2);
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 600 },
+      { startMin: 660, endMin: 720 },
+    ]);
+    expect(out[1]?.slots).toHaveLength(1);
+  });
+
+  it("preserves extra day fields and drops emptied days", () => {
+    const out = limitSlotsPerDay(
+      [{ date: "2024-06-03", weekday: 1, slots: [] as { startMin: number; endMin: number }[] }],
+      2,
+    );
+    expect(out).toHaveLength(0);
   });
 });

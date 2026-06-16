@@ -171,6 +171,17 @@ export function subtractBusy(
  * Compute per-day free slots for the whole date range. Transparent events must
  * be filtered out by the caller before this point (they are not busy).
  */
+/**
+ * Keep at most `max` free slots per day (the earliest ones), dropping any day
+ * left with none. Generic over the day shape so it works for both single and
+ * multi-person results. Pure.
+ */
+export function limitSlotsPerDay<D extends { slots: unknown[] }>(days: D[], max: number): D[] {
+  return days
+    .map((d) => ({ ...d, slots: d.slots.slice(0, max) }))
+    .filter((d) => d.slots.length > 0);
+}
+
 export function computeFreeSlots(busy: BusyInterval[], rules: BusinessRules): DayFreeSlots[] {
   if (rules.openMin >= rules.closeMin) {
     throw new Error("business hours: open time must be before close time");

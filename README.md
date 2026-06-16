@@ -51,6 +51,9 @@ freeslots --from 2024-06-02 --to 2024-06-06 --duration 60 work.ics personal.ics
 # Custom hours and days (include Saturday):
 freeslots --hours 10:00-18:00 --days mon,tue,wed,thu,fri,sat calendar.ics
 
+# At most 2 candidate slots per day (the earliest):
+freeslots --max-per-day 2 calendar.ics
+
 # JSON output:
 freeslots --json calendar.ics
 ```
@@ -86,6 +89,7 @@ Example output:
 | `--hours <HH:MM-HH:MM>` | Business hours | `09:00-19:00` |
 | `--days <list>` | Business weekdays: `mon,tue,wed,thu,fri,sat,sun` | `mon,tue,wed,thu,fri` |
 | `--duration <min>` | Minimum free-slot length in minutes | `30` |
+| `--max-per-day <n>` | Show at most n (earliest) free slots per day | all |
 | `--holidays <list>` | Comma list of `YYYY-MM-DD` dates to exclude (e.g. holidays) | none |
 | `--names <list>` | Labels for each `.ics` input (multi-person mode) | file names |
 | `--require <n>` | Min. people free per slot (multi-person mode) | all inputs |
