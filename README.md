@@ -25,11 +25,16 @@ The output is tuned for Japanese scheduling messages:
 
 ## Install
 
+Not published to npm yet — install from source:
+
 ```bash
-npm install -g @printemps-tokyo/freeslots
-# or run once without installing:
-npx @printemps-tokyo/freeslots calendar.ics
+git clone https://github.com/printemps-tokyo/freeslots
+cd freeslots
+npm install && npm run build
+npm link   # optional: puts the `freeslots` command on your PATH
 ```
+
+Then run `freeslots …` (after `npm link`), or `node dist/cli.js …` from the clone.
 
 Requires Node.js >= 20.
 
