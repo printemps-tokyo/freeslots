@@ -22,6 +22,7 @@ import {
   type IcsEvent,
   type DayFreeSlots,
 } from "./index.js";
+import { usageError } from "./usage.js";
 
 const HELP = `freeslots - find free meeting slots from .ics calendars
 
@@ -218,7 +219,7 @@ async function main(): Promise<number> {
     values = parsed.values;
     positionals = parsed.positionals;
   } catch (err) {
-    process.stderr.write(`error: ${(err as Error).message}\n`);
+    process.stderr.write(usageError(err, "freeslots"));
     return 1;
   }
 
