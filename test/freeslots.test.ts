@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeFreeSlots,
   limitSlotsPerDay,
+  sliceSlots,
   mergeIntervals,
   subtractBusy,
   jstMidnightMs,
@@ -218,6 +219,129 @@ describe("computeFreeSlots", () => {
     expect(() =>
       computeFreeSlots([], baseRules({ fromDate: "2024-06-05", toDate: "2024-06-03" })),
     ).toThrow();
+  });
+});
+
+describe("sliceSlots", () => {
+  const day = (slots: { startMin: number; endMin: number }[]) => [
+    { date: "2024-06-03", weekday: 1, slots },
+  ];
+
+  it("splits an exactly fitting interval into consecutive slots", () => {
+    // 9:00-11:00 with 60-minute slots -> 9:00-10:00 and 10:00-11:00.
+    const out = sliceSlots(day([{ startMin: 540, endMin: 660 }]), 60);
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 600 },
+      { startMin: 600, endMin: 660 },
+    ]);
+  });
+
+  it("drops a trailing remainder shorter than the slot length", () => {
+    // 9:00-10:50 with 60-minute slots -> only 9:00-10:00 (50-min tail dropped).
+    const out = sliceSlots(day([{ startMin: 540, endMin: 650 }]), 60);
+    expect(out[0]?.slots).toEqual([{ startMin: 540, endMin: 600 }]);
+  });
+
+  it("slices each free interval of a day independently", () => {
+    // 9:00-10:30 and 13:00-14:00, 30-minute slots.
+    const out = sliceSlots(
+      day([
+        { startMin: 540, endMin: 630 },
+        { startMin: 780, endMin: 840 },
+      ]),
+      30,
+    );
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 570 },
+      { startMin: 570, endMin: 600 },
+      { startMin: 600, endMin: 630 },
+      { startMin: 780, endMin: 810 },
+      { startMin: 810, endMin: 840 },
+    ]);
+  });
+
+  it("drops days left with no slots (empty result)", () => {
+    // A 40-minute interval cannot host a 60-minute slot.
+    expect(sliceSlots(day([{ startMin: 540, endMin: 580 }]), 60)).toEqual([]);
+  });
+
+  it("aligns slot starts to the grid", () => {
+    // 9:10-12:00 with 60-minute slots aligned to :00/:30 -> starts snap to 9:30.
+    const out = sliceSlots(day([{ startMin: 550, endMin: 720 }]), 60, 30);
+    expect(out[0]?.slots).toEqual([
+      { startMin: 570, endMin: 630 }, // 9:30-10:30
+      { startMin: 630, endMin: 690 }, // 10:30-11:30
+    ]);
+  });
+
+  it("keeps every start on the grid when the slot is not a grid multiple", () => {
+    // 45-minute slots on a 30-minute grid: skip up to the next grid point
+    // after each slot so all starts stay at :00/:30.
+    const out = sliceSlots(day([{ startMin: 540, endMin: 720 }]), 45, 30);
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 585 }, // 9:00-9:45
+      { startMin: 600, endMin: 645 }, // 10:00-10:45
+      { startMin: 660, endMin: 705 }, // 11:00-11:45
+    ]);
+  });
+
+  it("leaves an already aligned interval unchanged by alignment", () => {
+    const out = sliceSlots(day([{ startMin: 540, endMin: 660 }]), 60, 60);
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 600 },
+      { startMin: 600, endMin: 660 },
+    ]);
+  });
+
+  it("preserves extra per-slot fields on every slice", () => {
+    // The multi-person mode annotates slots with who is busy; slicing must
+    // carry that annotation onto each produced slot.
+    const out = sliceSlots(
+      [
+        {
+          date: "2024-06-03",
+          weekday: 1,
+          slots: [{ startMin: 540, endMin: 660, busy: ["alice"] }],
+        },
+      ],
+      60,
+    );
+    expect(out[0]?.slots).toEqual([
+      { startMin: 540, endMin: 600, busy: ["alice"] },
+      { startMin: 600, endMin: 660, busy: ["alice"] },
+    ]);
+  });
+
+  it("combines with the duration filter (duration prunes intervals first)", () => {
+    // Busy 12:00-13:00 and 13:45-19:00 leaves 9:00-12:00 and 13:00-13:45 free.
+    const busy: BusyInterval[] = [
+      { startMs: jst("2024-06-03", 12), endMs: jst("2024-06-03", 13) },
+      { startMs: jst("2024-06-03", 13, 45), endMs: jst("2024-06-03", 19) },
+    ];
+    // duration 60 drops the 45-minute gap before slicing; 30-minute slots then
+    // only come from the 9:00-12:00 interval.
+    const days = sliceSlots(computeFreeSlots(busy, baseRules({ minDurationMin: 60 })), 30);
+    expect(days[0]?.slots).toEqual([
+      { startMin: 540, endMin: 570 },
+      { startMin: 570, endMin: 600 },
+      { startMin: 600, endMin: 630 },
+      { startMin: 630, endMin: 660 },
+      { startMin: 660, endMin: 690 },
+      { startMin: 690, endMin: 720 },
+    ]);
+    // duration 30 keeps the 45-minute gap; a 30-minute slot fits there too.
+    const both = sliceSlots(computeFreeSlots(busy, baseRules({ minDurationMin: 30 })), 30);
+    expect(both[0]?.slots.at(-1)).toEqual({ startMin: 780, endMin: 810 });
+  });
+
+  it("throws on a non-positive or non-integer slot length", () => {
+    expect(() => sliceSlots(day([{ startMin: 540, endMin: 660 }]), 0)).toThrow();
+    expect(() => sliceSlots(day([{ startMin: 540, endMin: 660 }]), 7.5)).toThrow();
+  });
+
+  it("throws on a non-positive or non-integer alignment", () => {
+    expect(() => sliceSlots(day([{ startMin: 540, endMin: 660 }]), 60, 0)).toThrow();
+    expect(() => sliceSlots(day([{ startMin: 540, endMin: 660 }]), 60, 2.5)).toThrow();
   });
 });
 

@@ -14,6 +14,7 @@ export type { ExpandResult } from "./recurrence.js";
 export {
   computeFreeSlots,
   limitSlotsPerDay,
+  sliceSlots,
   mergeIntervals,
   subtractBusy,
   jstMidnightMs,

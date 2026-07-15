@@ -6,6 +6,7 @@ import {
   parseIcs,
   computeFreeSlots,
   limitSlotsPerDay,
+  sliceSlots,
   collectBusyIntervals,
   computeOverlapSlots,
   formatOverlapSlots,
@@ -38,6 +39,12 @@ Options:
   --days <list>             Business weekdays, comma list of
                             mon,tue,wed,thu,fri,sat,sun (default: mon,tue,wed,thu,fri)
   --duration <min>          Minimum free-slot length in minutes (default: 30)
+  --slot <min>              Split each free range into consecutive bookable
+                            slots of exactly this many minutes; a trailing
+                            remainder shorter than the slot is dropped
+  --align <min>             With --slot: snap each slot start forward to the
+                            next multiple of this many minutes from midnight
+                            (e.g. --align 30 starts slots only at :00 or :30)
   --max-per-day <n>         Show at most n (earliest) free slots per day
   --holidays <list>         Comma list of YYYY-MM-DD dates to exclude (e.g. holidays)
   --names <list>            Labels for each .ics input (multi-person mode)
@@ -153,6 +160,15 @@ function parseDuration(value: string): number {
   return n;
 }
 
+/** Parse a positive integer number of minutes for --slot / --align. */
+function parseMinutes(name: string, value: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`--${name} must be a positive integer number of minutes (got "${value}")`);
+  }
+  return n;
+}
+
 /** Parse a positive integer slot cap. */
 function parseMaxPerDay(value: string): number {
   const n = Number(value);
@@ -186,6 +202,8 @@ async function main(): Promise<number> {
         hours: { type: "string" },
         days: { type: "string" },
         duration: { type: "string" },
+        slot: { type: "string" },
+        align: { type: "string" },
         "max-per-day": { type: "string" },
         holidays: { type: "string" },
         names: { type: "string" },
@@ -210,8 +228,15 @@ async function main(): Promise<number> {
   }
 
   let maxPerDay: number | undefined;
+  let slotMin: number | undefined;
+  let alignMin: number | undefined;
   try {
     maxPerDay = values["max-per-day"] ? parseMaxPerDay(values["max-per-day"]) : undefined;
+    slotMin = values.slot !== undefined ? parseMinutes("slot", values.slot) : undefined;
+    alignMin = values.align !== undefined ? parseMinutes("align", values.align) : undefined;
+    if (alignMin !== undefined && slotMin === undefined) {
+      throw new Error("--align requires --slot");
+    }
   } catch (err) {
     process.stderr.write(`error: ${(err as Error).message}\n`);
     return 1;
@@ -295,6 +320,7 @@ async function main(): Promise<number> {
       require = r;
     }
     let days = computeOverlapSlots(busyPerFile, names, rules, require);
+    if (slotMin !== undefined) days = sliceSlots(days, slotMin, alignMin);
     if (maxPerDay !== undefined) days = limitSlotsPerDay(days, maxPerDay);
     if (values["ics-out"] && !(await writeIcs(values, days.map(toFreeSlotsShape)))) {
       return 1;
@@ -311,6 +337,7 @@ async function main(): Promise<number> {
   // Single (merged) mode: everyone-free slots across all calendars.
   const merged = busyPerFile.flat();
   let days = computeFreeSlots(merged, rules);
+  if (slotMin !== undefined) days = sliceSlots(days, slotMin, alignMin);
   if (maxPerDay !== undefined) days = limitSlotsPerDay(days, maxPerDay);
 
   if (values["ics-out"] && !(await writeIcs(values, days))) {

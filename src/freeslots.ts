@@ -182,6 +182,51 @@ export function limitSlotsPerDay<D extends { slots: unknown[] }>(days: D[], max:
     .filter((d) => d.slots.length > 0);
 }
 
+/**
+ * Split each day's free intervals into consecutive bookable slots of exactly
+ * `slotMin` minutes. A trailing remainder shorter than `slotMin` is dropped,
+ * and days left with no slots are removed.
+ *
+ * With `alignMin`, every slot start is snapped forward to the next multiple of
+ * `alignMin` minutes from midnight (e.g. 30 aligns starts to :00/:30). When
+ * `slotMin` is not a multiple of `alignMin`, the gap up to the next grid point
+ * after each slot is skipped so that every start stays on the grid.
+ *
+ * Generic over the slot shape so extra per-slot fields (e.g. the multi-person
+ * busy annotation) are carried onto every produced slice. Pure.
+ */
+export function sliceSlots<S extends FreeSlotMinutes, D extends { slots: S[] }>(
+  days: D[],
+  slotMin: number,
+  alignMin?: number,
+): D[] {
+  if (!Number.isInteger(slotMin) || slotMin <= 0) {
+    throw new Error("slot length must be a positive integer number of minutes");
+  }
+  if (alignMin !== undefined && (!Number.isInteger(alignMin) || alignMin <= 0)) {
+    throw new Error("slot alignment must be a positive integer number of minutes");
+  }
+  const alignUp = (min: number): number =>
+    alignMin === undefined ? min : Math.ceil(min / alignMin) * alignMin;
+
+  return days
+    .map((d) => ({
+      ...d,
+      slots: d.slots.flatMap((s) => {
+        const sliced: S[] = [];
+        for (
+          let cur = alignUp(s.startMin);
+          cur + slotMin <= s.endMin;
+          cur = alignUp(cur + slotMin)
+        ) {
+          sliced.push({ ...s, startMin: cur, endMin: cur + slotMin });
+        }
+        return sliced;
+      }),
+    }))
+    .filter((d) => d.slots.length > 0);
+}
+
 export function computeFreeSlots(busy: BusyInterval[], rules: BusinessRules): DayFreeSlots[] {
   if (rules.openMin >= rules.closeMin) {
     throw new Error("business hours: open time must be before close time");

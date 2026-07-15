@@ -59,6 +59,9 @@ freeslots --hours 10:00-18:00 --days mon,tue,wed,thu,fri,sat calendar.ics
 # At most 2 candidate slots per day (the earliest):
 freeslots --max-per-day 2 calendar.ics
 
+# Bookable 30-minute slots starting on the half hour instead of raw ranges:
+freeslots --slot 30 --align 30 calendar.ics
+
 # JSON output:
 freeslots --json calendar.ics
 ```
@@ -94,6 +97,8 @@ Example output:
 | `--hours <HH:MM-HH:MM>` | Business hours | `09:00-19:00` |
 | `--days <list>` | Business weekdays: `mon,tue,wed,thu,fri,sat,sun` | `mon,tue,wed,thu,fri` |
 | `--duration <min>` | Minimum free-slot length in minutes | `30` |
+| `--slot <min>` | Split each free range into consecutive bookable slots of exactly this many minutes (remainders shorter than the slot are dropped) | off |
+| `--align <min>` | With `--slot`: snap each slot start forward to the next multiple of this many minutes from midnight (e.g. `30` starts slots only at :00/:30) | off |
 | `--max-per-day <n>` | Show at most n (earliest) free slots per day | all |
 | `--holidays <list>` | Comma list of `YYYY-MM-DD` dates to exclude (e.g. holidays) | none |
 | `--names <list>` | Labels for each `.ics` input (multi-person mode) | file names |
@@ -149,6 +154,9 @@ M/D(W) H:MM〜H:MM、H:MM〜H:MM
   counts as *available*. Only `OPAQUE` (busy) events reduce availability.
 - A free slot is business-hours time on a business day, minus the union of busy
   intervals, keeping only gaps at least `--duration` minutes long.
+- With `--slot`, each remaining free range is then cut into consecutive
+  fixed-length slots (`--duration` filters ranges first, `--slot` slices what
+  is left); `--align` snaps slot starts to a minute grid.
 
 `.ics` date/time forms understood: UTC (`...Z`), floating local time (treated
 as JST), `TZID=...` zoned times (Tokyo and other IANA zones), and all-day
