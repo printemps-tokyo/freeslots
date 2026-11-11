@@ -36,7 +36,7 @@ npm link   # optional: puts the `freeslots` command on your PATH
 
 Then run `freeslots …` (after `npm link`), or `node dist/cli.js …` from the clone.
 
-Requires Node.js >= 20.
+Requires Node.js >= 22.
 
 ## Usage
 
