@@ -7,7 +7,7 @@
  *   - keeps only the opaque (busy) instances overlapping the window.
  */
 
-import type { IcsEvent } from "./ics.js";
+import { toJstWall, type IcsEvent } from "./ics.js";
 import { expandEvent } from "./recurrence.js";
 import type { BusyInterval } from "./freeslots.js";
 
@@ -44,4 +44,29 @@ export function collectBusyIntervals(
   }
 
   return { busy, unsupportedRecurrence };
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * The JST dates (YYYY-MM-DD) covered by all-day events within the window,
+ * for treating a holiday calendar's days as days off. Holiday feeds mark
+ * their events transparent (they block no time), so transparency is not
+ * looked at here; timed events are ignored.
+ */
+export function allDayDates(events: IcsEvent[], windowStartMs: number, windowEndMs: number): Set<string> {
+  const dates = new Set<string>();
+  for (const event of events) {
+    const { instances } = expandEvent(event, windowStartMs, windowEndMs);
+    for (const instance of instances) {
+      if (!instance.allDay) continue;
+      // All-day instants are JST midnights; step a day at a time.
+      for (let t = instance.startMs; t < instance.endMs; t += MS_PER_DAY) {
+        if (t + MS_PER_DAY <= windowStartMs || t >= windowEndMs) continue;
+        const w = toJstWall(t);
+        dates.add(`${w.year}-${String(w.month).padStart(2, "0")}-${String(w.day).padStart(2, "0")}`);
+      }
+    }
+  }
+  return dates;
 }

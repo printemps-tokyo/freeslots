@@ -32,7 +32,7 @@ export type {
 export { formatSlots, formatDayLine, formatTime, toJson, WEEKDAY_CHARS } from "./format.js";
 export type { JsonDay } from "./format.js";
 
-export { collectBusyIntervals } from "./pipeline.js";
+export { collectBusyIntervals, allDayDates } from "./pipeline.js";
 export type { CollectResult } from "./pipeline.js";
 
 export { buildIcs, utcStamp, jstWallToUtcStamp } from "./ics-export.js";
@@ -45,3 +45,4 @@ export {
   toJsonOverlap,
 } from "./overlap.js";
 export type { OverlapSlot, DayOverlapSlots, JsonOverlapDay } from "./overlap.js";
+export { fetchIcs, isCalendarUrl, describeUrl, fetchUrlFor, type FetchIcsOptions } from "./fetch-ics.js";

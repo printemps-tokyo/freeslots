@@ -8,6 +8,7 @@ import {
   limitSlotsPerDay,
   sliceSlots,
   collectBusyIntervals,
+  allDayDates,
   computeOverlapSlots,
   formatOverlapSlots,
   toJsonOverlap,
@@ -23,15 +24,18 @@ import {
   type DayFreeSlots,
 } from "./index.js";
 import { usageError } from "./usage.js";
+import { describeUrl, fetchIcs, isCalendarUrl } from "./fetch-ics.js";
 
 const HELP = `freeslots - find free meeting slots from .ics calendars
 
 Usage:
-  freeslots [options] <calendar.ics...>
+  freeslots [options] <calendar.ics | URL...>
 
-Reads one or more local iCalendar (.ics) files and prints the FREE meeting
-slots within business hours. Fully offline - export an .ics from Google
-Calendar (or any calendar app) and pass it in. No API or network is used.
+Reads one or more iCalendar (.ics) files or feed URLs and prints the FREE
+meeting slots within business hours. Export an .ics from Google Calendar (or
+any calendar app) and pass it in, or pass the calendar's address in iCal
+format (https:// or webcal://). Only a URL makes freeslots use the network;
+files are read offline, and no API is used.
 
 Options:
   --from <YYYY-MM-DD>       Inclusive start date in JST (default: today in Asia/Tokyo)
@@ -48,6 +52,8 @@ Options:
                             (e.g. --align 30 starts slots only at :00 or :30)
   --max-per-day <n>         Show at most n (earliest) free slots per day
   --holidays <list>         Comma list of YYYY-MM-DD dates to exclude (e.g. holidays)
+  --holidays-from <ics|URL> Also exclude every day an all-day event covers in this
+                            calendar, such as a public-holiday feed (repeatable)
   --names <list>            Labels for each .ics input (multi-person mode)
   --require <n>             Min. people free per slot (default: all; <all annotates
                             who is busy as "(X不可)")
@@ -207,6 +213,7 @@ async function main(): Promise<number> {
         align: { type: "string" },
         "max-per-day": { type: "string" },
         holidays: { type: "string" },
+        "holidays-from": { type: "string", multiple: true },
         names: { type: "string" },
         require: { type: "string" },
         json: { type: "boolean", default: false },
@@ -271,16 +278,20 @@ async function main(): Promise<number> {
   const perFileEvents: IcsEvent[][] = [];
   for (const path of positionals) {
     let text: string;
+    const remote = isCalendarUrl(path);
+    const name = remote ? describeUrl(path) : `"${path}"`;
     try {
-      text = await readFile(path, "utf8");
-    } catch {
-      process.stderr.write(`error: cannot read .ics file "${path}"\n`);
+      text = remote ? await fetchIcs(path) : await readFile(path, "utf8");
+    } catch (err) {
+      process.stderr.write(
+        remote ? `error: ${(err as Error).message}\n` : `error: cannot read .ics file "${path}"\n`,
+      );
       return 1;
     }
     try {
       perFileEvents.push(parseIcs(text));
     } catch (err) {
-      process.stderr.write(`error: failed to parse "${path}": ${(err as Error).message}\n`);
+      process.stderr.write(`error: failed to parse ${name}: ${(err as Error).message}\n`);
       return 1;
     }
   }
@@ -288,6 +299,20 @@ async function main(): Promise<number> {
   // The query window spans whole JST days from `from` through `to` inclusive.
   const windowStartMs = jstMidnightMs(rules.fromDate);
   const windowEndMs = jstMidnightMs(rules.toDate) + MS_PER_DAY;
+
+  for (const source of values["holidays-from"] ?? []) {
+    const remote = isCalendarUrl(source);
+    try {
+      const text = remote ? await fetchIcs(source) : await readFile(source, "utf8");
+      const days = allDayDates(parseIcs(text), windowStartMs, windowEndMs);
+      rules = { ...rules, holidays: new Set([...(rules.holidays ?? []), ...days]) };
+    } catch (err) {
+      const name = remote ? describeUrl(source) : `"${source}"`;
+      const why = remote ? (err as Error).message : `cannot read or parse ${name}: ${(err as Error).message}`;
+      process.stderr.write(`error: --holidays-from: ${why}\n`);
+      return 1;
+    }
+  }
 
   let unsupportedRecurrence = 0;
   const busyPerFile = perFileEvents.map((events) => {

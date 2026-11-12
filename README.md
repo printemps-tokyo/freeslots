@@ -11,10 +11,11 @@ scheduling message.
 
 ## Why
 
-You do not need any calendar API, OAuth, or network access. Export an `.ics`
-from Google Calendar (Settings -> Import & export -> Export), Apple Calendar,
-or Outlook, then point `freeslots` at the file. Everything runs offline on the
-local `.ics` text.
+You do not need any calendar API or OAuth. Export an `.ics` from Google
+Calendar (Settings -> Import & export -> Export), Apple Calendar, or Outlook,
+then point `freeslots` at the file, and everything runs offline on the local
+`.ics` text; or give it the calendar's iCal address and it downloads the feed
+itself.
 
 The output is tuned for Japanese scheduling messages:
 
@@ -44,7 +45,20 @@ Requires Node.js >= 22.
 freeslots [options] <calendar.ics...>
 ```
 
-Pass multiple `.ics` files to merge all of their events.
+Pass multiple `.ics` files to merge all of their events. An input can also be
+a calendar's address in iCal format (`https://` or `webcal://`), such as the
+public address or the "secret address in iCal format" Google Calendar shows
+in a calendar's settings. Only such a URL makes freeslots use the network;
+messages show its host but never its path, where a secret address keeps its
+key.
+
+```bash
+# Read the calendar straight from its iCal address:
+freeslots "https://calendar.google.com/calendar/ical/.../basic.ics"
+
+# Treat Japanese public holidays as days off, from Google's holiday calendar:
+freeslots --holidays-from "https://calendar.google.com/calendar/ical/ja.japanese%23holiday%40group.v.calendar.google.com/public/basic.ics" work.ics
+```
 
 ```bash
 # Next 7 days, default 09:00-19:00 business hours, weekdays only:
@@ -101,6 +115,7 @@ Example output:
 | `--align <min>` | With `--slot`: snap each slot start forward to the next multiple of this many minutes from midnight (e.g. `30` starts slots only at :00/:30) | off |
 | `--max-per-day <n>` | Show at most n (earliest) free slots per day | all |
 | `--holidays <list>` | Comma list of `YYYY-MM-DD` dates to exclude (e.g. holidays) | none |
+| `--holidays-from <ics\|URL>` | Also exclude every day that an all-day event covers in this calendar, such as a public-holiday feed (repeatable). Holiday feeds mark their events as free time, so as an ordinary input they would not block the day | none |
 | `--names <list>` | Labels for each `.ics` input (multi-person mode) | file names |
 | `--require <n>` | Min. people free per slot (multi-person mode) | all inputs |
 | `--json` | Output JSON instead of the human format | off |

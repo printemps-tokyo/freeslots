@@ -1,6 +1,6 @@
 {
   "name": "@printemps-tokyo/freeslots",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find free meeting slots from .ics calendars. Zero-dependency CLI.",
   "type": "module",
   "license": "MIT",
